@@ -17,6 +17,8 @@ type trackStreams struct {
 	track          *Track
 	rtpReadStream  *srtp.ReadStreamSRTP
 	rtcpReadStream *srtp.ReadStreamSRTCP
+	fecTrack       *trackStreams
+	rtxTrack       *trackStreams
 }
 
 // RTPReceiver allows an application to inspect the receipt of a Track
@@ -68,6 +70,34 @@ func (r *RTPReceiver) Track() *Track {
 	return r.tracks[0].track
 }
 
+// FecTrack returns RtpTranceiver's track's fec track
+func (r *RTPReceiver) FecTrack() *Track {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if len(r.tracks) != 1 {
+		return nil
+	}
+	if r.tracks[0].fecTrack != nil {
+		return r.tracks[0].fecTrack.track
+	}
+	return nil
+}
+
+// RtxTrack returns RtpTransceiver's track's rtx track
+func (r *RTPReceiver) RtxTrack() *Track {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if len(r.tracks) != 1 {
+		return nil
+	}
+	if r.tracks[0].rtxTrack != nil {
+		return r.tracks[0].rtxTrack.track
+	}
+	return nil
+}
+
 // Tracks returns the RtpTransceiver tracks
 // A RTPReceiver to support Simulcast may now have multiple tracks
 func (r *RTPReceiver) Tracks() []*Track {
@@ -108,6 +138,46 @@ func (r *RTPReceiver) Receive(parameters RTPReceiveParameters) error {
 		}
 
 		r.tracks = append(r.tracks, t)
+
+		// make fec track
+		if parameters.Encodings[0].FecSSRC != 0 {
+			t := trackStreams{
+				track: &Track{
+					kind:       r.kind,
+					ssrc:       parameters.Encodings[0].FecSSRC,
+					receiver:   r,
+					isFecTrack: true,
+				},
+			}
+
+			var err error
+			t.rtpReadStream, t.rtcpReadStream, err = r.streamsForSSRC(parameters.Encodings[0].FecSSRC)
+			if err != nil {
+				return err
+			}
+
+			r.tracks[0].fecTrack = &t
+		}
+
+		// make rtx track
+		if parameters.Encodings[0].RtxSSRC != 0 {
+			t := trackStreams{
+				track: &Track{
+					kind:       r.kind,
+					ssrc:       parameters.Encodings[0].RtxSSRC,
+					receiver:   r,
+					isRtxTrack: true,
+				},
+			}
+
+			var err error
+			t.rtpReadStream, t.rtcpReadStream, err = r.streamsForSSRC(parameters.Encodings[0].RtxSSRC)
+			if err != nil {
+				return err
+			}
+
+			r.tracks[0].rtxTrack = &t
+		}
 	} else {
 		for _, encoding := range parameters.Encodings {
 			r.tracks = append(r.tracks, trackStreams{
@@ -215,6 +285,13 @@ func (r *RTPReceiver) streamsForTrack(t *Track) *trackStreams {
 	for i := range r.tracks {
 		if r.tracks[i].track == t {
 			return &r.tracks[i]
+		}
+		if r.tracks[i].fecTrack != nil && r.tracks[i].fecTrack.track == t {
+			return r.tracks[i].fecTrack
+		}
+
+		if r.tracks[i].rtxTrack != nil && r.tracks[i].rtxTrack.track == t {
+			return r.tracks[i].rtxTrack
 		}
 	}
 	return nil

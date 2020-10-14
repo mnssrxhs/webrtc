@@ -16,12 +16,14 @@ import (
 // trackDetails represents any media source that can be represented in a SDP
 // This isn't keyed by SSRC because it also needs to support rid based sources
 type trackDetails struct {
-	mid   string
-	kind  RTPCodecType
-	label string
-	id    string
-	ssrc  uint32
-	rids  []string
+	mid     string
+	kind    RTPCodecType
+	label   string
+	id      string
+	ssrc    uint32
+	rids    []string
+	fecSsrc uint32
+	rtxSsrc uint32
 }
 
 func trackDetailsForSSRC(trackDetails []trackDetails, ssrc uint32) *trackDetails {
@@ -57,11 +59,13 @@ const (
 func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) []trackDetails { // nolint:gocognit
 	incomingTracks := []trackDetails{}
 	rtxRepairFlows := map[uint32]bool{}
+	fecFlows := map[uint32]bool{}
 
 	for _, media := range s.MediaDescriptions {
 		// Plan B can have multiple tracks in a signle media section
 		trackLabel := ""
 		trackID := ""
+		var fecssrc, rtxssrc uint32
 
 		// If media section is recvonly or inactive skip
 		if _, ok := media.Attribute(sdp.AttrKeyRecvOnly); ok {
@@ -90,7 +94,7 @@ func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) [
 					// as this declares that the second SSRC (632943048) is a rtx repair flow (RFC4588) for the first
 					// (2231627014) as specified in RFC5576
 					if len(split) == 3 {
-						_, err := strconv.ParseUint(split[1], 10, 32)
+						ssrcMedia, err := strconv.ParseUint(split[1], 10, 32)
 						if err != nil {
 							log.Warnf("Failed to parse SSRC: %v", err)
 							continue
@@ -100,8 +104,39 @@ func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) [
 							log.Warnf("Failed to parse SSRC: %v", err)
 							continue
 						}
+						rtxssrc = uint32(rtxRepairFlow)
 						rtxRepairFlows[uint32(rtxRepairFlow)] = true
 						incomingTracks = filterTrackWithSSRC(incomingTracks, uint32(rtxRepairFlow)) // Remove if rtx was added as track before
+
+						for _, v := range incomingTracks {
+							if v.ssrc == uint32(ssrcMedia) {
+								v.rtxSsrc = fecssrc
+								break
+							}
+						}
+					}
+				} else if split[0] == "FEC-FR" { // for fec flow
+					if len(split) == 3 {
+						ssrcMedia, err := strconv.ParseUint(split[1], 10, 32)
+						if err != nil {
+							log.Warnf("Failed to parse SSRC: %v", err)
+							continue
+						}
+						ssrc, err := strconv.ParseUint(split[2], 10, 32)
+						if err != nil {
+							log.Warnf("Failed to parse SSRC: %v", err)
+							continue
+						}
+						fecssrc = uint32(ssrc)
+						fecFlows[fecssrc] = true
+						incomingTracks = filterTrackWithSSRC(incomingTracks, uint32(ssrc)) // Remove if rtx was added as track before
+
+						for _, v := range incomingTracks {
+							if v.ssrc == uint32(ssrcMedia) {
+								v.fecSsrc = fecssrc
+								break
+							}
+						}
 					}
 				}
 
@@ -127,6 +162,10 @@ func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) [
 					continue // This ssrc is a RTX repair flow, ignore
 				}
 
+				if fecflow := fecFlows[uint32(ssrc)]; fecflow {
+					continue
+				}
+
 				if len(split) == 3 && strings.HasPrefix(split[1], "msid:") {
 					trackLabel = split[1][len("msid:"):]
 					trackID = split[2]
@@ -146,6 +185,8 @@ func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) [
 				trackDetails.label = trackLabel
 				trackDetails.id = trackID
 				trackDetails.ssrc = uint32(ssrc)
+				trackDetails.fecSsrc = fecssrc
+				trackDetails.rtxSsrc = rtxssrc
 
 				if isNewTrack {
 					incomingTracks = append(incomingTracks, *trackDetails)

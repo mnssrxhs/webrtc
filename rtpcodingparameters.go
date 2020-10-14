@@ -7,4 +7,6 @@ type RTPCodingParameters struct {
 	RID         string `json:"rid"`
 	SSRC        uint32 `json:"ssrc"`
 	PayloadType uint8  `json:"payloadType"`
+	FecSSRC     uint32 `json:"fecSsrc"`
+	RtxSSRC     uint32 `json:"rtxSsrc"`
 }

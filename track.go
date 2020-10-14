@@ -35,6 +35,28 @@ type Track struct {
 	activeSenders    []*RTPSender
 	totalSenderCount int // count of all senders (accounts for senders that have not been started yet)
 	peeked           []byte
+
+	// fec track
+	isFecTrack bool
+	isRtxTrack bool
+	srcTrack   *Track
+}
+
+// IsFec get the track is a fec track
+func (t *Track) IsFec() bool {
+	return t.isFecTrack
+}
+
+// IsRtx get the track is a rtx track
+func (t *Track) IsRtx() bool {
+	return t.isRtxTrack
+}
+
+// SrcTrack get the source track of fec track
+func (t *Track) SrcTrack() *Track {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.srcTrack
 }
 
 // ID gets the ID of the track
