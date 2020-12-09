@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/pion/dtls/v2"
 	"github.com/pion/dtls/v2/pkg/crypto/fingerprint"
+	"github.com/pion/logging"
 	"github.com/pion/srtp"
 	"github.com/pion/webrtc/v3/internal/mux"
 	"github.com/pion/webrtc/v3/internal/util"
@@ -49,17 +51,23 @@ type DTLSTransport struct {
 	dtlsMatcher mux.MatchFunc
 
 	api *API
+	log logging.LeveledLogger
 }
 
 // NewDTLSTransport creates a new DTLSTransport.
 // This constructor is part of the ORTC API. It is not
 // meant to be used together with the basic WebRTC API.
 func (api *API) NewDTLSTransport(transport *ICETransport, certificates []Certificate) (*DTLSTransport, error) {
+	loggerFactory := api.settingEngine.LoggerFactory
+	if loggerFactory == nil {
+		loggerFactory = logging.NewDefaultLoggerFactory()
+	}
 	t := &DTLSTransport{
 		iceTransport: transport,
 		api:          api,
 		state:        DTLSTransportStateNew,
 		dtlsMatcher:  mux.MatchDTLS,
+		log:          loggerFactory.NewLogger("pc"),
 	}
 
 	if len(certificates) > 0 {
@@ -191,6 +199,12 @@ func (t *DTLSTransport) startSRTP() error {
 	if err != nil {
 		return fmt.Errorf("%w: %v", errDtlsKeyExtractionFailed, err)
 	}
+	t.log.Infof("local ctx master key&salt: %s ",
+		base64.StdEncoding.EncodeToString(append(srtpConfig.Keys.LocalMasterKey,
+			srtpConfig.Keys.LocalMasterSalt...)))
+	t.log.Infof("remote ctx master key&salt: %s ",
+		base64.StdEncoding.EncodeToString(append(srtpConfig.Keys.RemoteMasterKey,
+			srtpConfig.Keys.RemoteMasterSalt...)))
 
 	srtpSession, err := srtp.NewSessionSRTP(t.srtpEndpoint, srtpConfig)
 	if err != nil {
