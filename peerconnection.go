@@ -353,7 +353,16 @@ func (pc *PeerConnection) checkNegotiationNeeded() bool { //nolint:gocognit
 			// Step 5.3.1
 			if t.Direction() == RTPTransceiverDirectionSendrecv || t.Direction() == RTPTransceiverDirectionSendonly {
 				descMsid, okMsid := m.Attribute(sdp.AttrKeyMsid)
-				if !okMsid || t.Sender() == nil || t.Sender().Track() == nil || descMsid != t.Sender().Track().Msid() {
+
+				// zj fix: panic when sender's track is nil
+				sender := t.Sender()
+				var track *Track
+				if sender != nil {
+					track = sender.Track()
+				}
+
+				// if !okMsid || t.Sender() == nil || t.Sender().Track() == nil || descMsid != t.Sender().Track().Msid() {
+				if !okMsid || sender == nil || track == nil || descMsid != track.Msid() {
 					return true
 				}
 			}
