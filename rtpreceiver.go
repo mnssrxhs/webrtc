@@ -273,6 +273,24 @@ func (r *RTPReceiver) Stop() error {
 					return err
 				}
 			}
+
+			if fec := r.tracks[i].fecTrack; fec != nil {
+				if fec.rtcpReadStream != nil {
+					fec.rtcpReadStream.Close()
+				}
+				if fec.rtpReadStream != nil {
+					fec.rtpReadStream.Close()
+				}
+			}
+
+			if rtx := r.tracks[i].rtxTrack; rtx != nil {
+				if rtx.rtcpReadStream != nil {
+					rtx.rtcpReadStream.Close()
+				}
+				if rtx.rtpReadStream != nil {
+					rtx.rtpReadStream.Close()
+				}
+			}
 		}
 	default:
 	}
