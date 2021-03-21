@@ -4,6 +4,7 @@ package webrtc
 
 import (
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +40,8 @@ type RTPSender struct {
 
 	mu                     sync.RWMutex
 	sendCalled, stopCalled chan struct{}
+
+	fec, rtx SSRC
 }
 
 // NewRTPSender constructs a new RTPSender
@@ -54,6 +57,21 @@ func (api *API) NewRTPSender(track TrackLocal, transport *DTLSTransport) (*RTPSe
 		return nil, err
 	}
 
+	// check rtx & fec enabled
+	var rtx, fec bool
+	codecs := api.mediaEngine.getCodecsByKind(track.Kind())
+	for _, c := range codecs {
+		if !rtx && strings.HasSuffix(c.MimeType, "rtx") {
+			rtx = true
+		}
+		if !fec && strings.HasSuffix(c.MimeType, "fec") {
+			fec = true
+		}
+		if rtx && fec {
+			break
+		}
+	}
+
 	r := &RTPSender{
 		track:      track,
 		transport:  transport,
@@ -63,6 +81,12 @@ func (api *API) NewRTPSender(track TrackLocal, transport *DTLSTransport) (*RTPSe
 		ssrc:       SSRC(randutil.NewMathRandomGenerator().Uint32()),
 		id:         id,
 		srtpStream: &srtpWriterFuture{},
+	}
+	if fec {
+		r.fec = SSRC(randutil.NewMathRandomGenerator().Uint32())
+	}
+	if rtx {
+		r.rtx = SSRC(randutil.NewMathRandomGenerator().Uint32())
 	}
 
 	r.srtpStream.rtpSender = r
@@ -176,6 +200,13 @@ func (r *RTPSender) Send(parameters RTPSendParameters) error {
 	r.context.params.Codecs = []RTPCodecParameters{codec}
 
 	streamInfo := createStreamInfo(r.id, parameters.Encodings[0].SSRC, codec.PayloadType, codec.RTPCodecCapability, parameters.HeaderExtensions)
+	if r.fec != 0 {
+		streamInfo.Attributes.Set(IctFECSSRCAttr, r.fec)
+	}
+	if r.rtx != 0 {
+		streamInfo.Attributes.Set(IctRTXSSRCAttr, r.rtx)
+	}
+
 	rtpInterceptor := r.api.interceptor.BindLocalStream(&streamInfo, interceptor.RTPWriterFunc(func(header *rtp.Header, payload []byte, attributes interceptor.Attributes) (int, error) {
 		return r.srtpStream.WriteRTP(header, payload)
 	}))

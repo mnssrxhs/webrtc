@@ -14,6 +14,11 @@ import (
 	"github.com/pion/webrtc/v3/internal/util"
 )
 
+const (
+	IctFECSSRCAttr = "fec-ssrc"
+	IctRTXSSRCAttr = "rtx-ssrc"
+)
+
 // trackStreams maintains a mapping of RTP/RTCP streams to a specific track
 // a RTPReceiver may contain multiple streams if we are dealing with Multicast
 type trackStreams struct {
@@ -24,6 +29,9 @@ type trackStreams struct {
 
 	rtcpReadStream  *srtp.ReadStreamSRTCP
 	rtcpInterceptor interceptor.RTCPReader
+
+	fecTrack *trackStreams
+	rtxTrack *trackStreams
 }
 
 // RTPReceiver allows an application to inspect the receipt of a TrackRemote
@@ -83,6 +91,34 @@ func (r *RTPReceiver) Track() *TrackRemote {
 	return r.tracks[0].track
 }
 
+// FecTrack returns RtpTransceiver's track's fec track
+func (r *RTPReceiver) FecTrack() *TrackRemote {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if len(r.tracks) != 1 {
+		return nil
+	}
+	if r.tracks[0].fecTrack != nil {
+		return r.tracks[0].fecTrack.track
+	}
+	return nil
+}
+
+// RtxTrack returns RtpTransceiver's track's rtx track
+func (r *RTPReceiver) RtxTrack() *TrackRemote {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if len(r.tracks) != 1 {
+		return nil
+	}
+	if r.tracks[0].rtxTrack != nil {
+		return r.tracks[0].rtxTrack.track
+	}
+	return nil
+}
+
 // Tracks returns the RtpTransceiver tracks
 // A RTPReceiver to support Simulcast may now have multiple tracks
 func (r *RTPReceiver) Tracks() []*TrackRemote {
@@ -124,12 +160,55 @@ func (r *RTPReceiver) Receive(parameters RTPReceiveParameters) error {
 		}
 
 		streamInfo := createStreamInfo("", parameters.Encodings[0].SSRC, 0, codec, globalParams.HeaderExtensions)
+
+		// fec & rtx
+		if parameters.Encodings[0].FecSSRC != 0 {
+			streamInfo.Attributes.Set(IctFECSSRCAttr, parameters.Encodings[0].FecSSRC)
+		}
+		if parameters.Encodings[0].RtxSSRC != 0 {
+			streamInfo.Attributes.Set(IctRTXSSRCAttr, parameters.Encodings[0].RtxSSRC)
+		}
+
 		var err error
 		if t.rtpReadStream, t.rtpInterceptor, t.rtcpReadStream, t.rtcpInterceptor, err = r.streamsForSSRC(parameters.Encodings[0].SSRC, streamInfo); err != nil {
 			return err
 		}
 
 		r.tracks = append(r.tracks, t)
+
+		// fec & rtx
+		if parameters.Encodings[0].FecSSRC != 0 {
+			t := trackStreams{
+				track: newTrackRemote(
+					r.kind,
+					SSRC(parameters.Encodings[0].FecSSRC),
+					"",
+					r,
+				),
+			}
+			streamInfo := createStreamInfo("", SSRC(parameters.Encodings[0].FecSSRC), 0, codec, globalParams.HeaderExtensions)
+			var err error
+			if t.rtpReadStream, t.rtpInterceptor, t.rtcpReadStream, t.rtcpInterceptor, err = r.streamsForSSRC(SSRC(parameters.Encodings[0].FecSSRC), streamInfo); err != nil {
+				return err
+			}
+			r.tracks[0].fecTrack = &t
+		}
+		if parameters.Encodings[0].RtxSSRC != 0 {
+			t := trackStreams{
+				track: newTrackRemote(
+					r.kind,
+					SSRC(parameters.Encodings[0].RtxSSRC),
+					"",
+					r,
+				),
+			}
+			var err error
+			if t.rtpReadStream, t.rtpInterceptor, t.rtcpReadStream, t.rtcpInterceptor, err = r.streamsForSSRC(SSRC(parameters.Encodings[0].RtxSSRC), streamInfo); err != nil {
+				return err
+			}
+			r.tracks[0].rtxTrack = &t
+		}
+
 	} else {
 		for _, encoding := range parameters.Encodings {
 			r.tracks = append(r.tracks, trackStreams{
@@ -247,6 +326,13 @@ func (r *RTPReceiver) streamsForTrack(t *TrackRemote) *trackStreams {
 	for i := range r.tracks {
 		if r.tracks[i].track == t {
 			return &r.tracks[i]
+		}
+		if r.tracks[i].fecTrack != nil && r.tracks[i].fecTrack.track == t {
+			return r.tracks[i].fecTrack
+		}
+
+		if r.tracks[i].rtxTrack != nil && r.tracks[i].rtxTrack.track == t {
+			return r.tracks[i].rtxTrack
 		}
 	}
 	return nil
