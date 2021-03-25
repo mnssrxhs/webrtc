@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	IctFECSSRCAttr = "fec-ssrc"
-	IctRTXSSRCAttr = "rtx-ssrc"
+	IctFECSSRCAttr  = "fec-ssrc"
+	IctRTXSSRCAttr  = "rtx-ssrc"
+	IctRTXTrackAttr = "rtxtrack"
+	IctFECTrackAttr = "fectrack"
 )
 
 // trackStreams maintains a mapping of RTP/RTCP streams to a specific track
@@ -163,10 +165,10 @@ func (r *RTPReceiver) Receive(parameters RTPReceiveParameters) error {
 
 		// fec & rtx
 		if parameters.Encodings[0].FecSSRC != 0 {
-			streamInfo.Attributes.Set(IctFECSSRCAttr, parameters.Encodings[0].FecSSRC)
+			streamInfo.Attributes.Set(IctFECSSRCAttr, uint32(parameters.Encodings[0].FecSSRC))
 		}
 		if parameters.Encodings[0].RtxSSRC != 0 {
-			streamInfo.Attributes.Set(IctRTXSSRCAttr, parameters.Encodings[0].RtxSSRC)
+			streamInfo.Attributes.Set(IctRTXSSRCAttr, uint32(parameters.Encodings[0].RtxSSRC))
 		}
 
 		var err error
@@ -186,7 +188,9 @@ func (r *RTPReceiver) Receive(parameters RTPReceiveParameters) error {
 					r,
 				),
 			}
+			t.track.isFec = true
 			streamInfo := createStreamInfo("", SSRC(parameters.Encodings[0].FecSSRC), 0, codec, globalParams.HeaderExtensions)
+			streamInfo.Attributes.Set(IctFECTrackAttr, 1)
 			var err error
 			if t.rtpReadStream, t.rtpInterceptor, t.rtcpReadStream, t.rtcpInterceptor, err = r.streamsForSSRC(SSRC(parameters.Encodings[0].FecSSRC), streamInfo); err != nil {
 				return err
@@ -202,6 +206,9 @@ func (r *RTPReceiver) Receive(parameters RTPReceiveParameters) error {
 					r,
 				),
 			}
+			t.track.isRtx = true
+			streamInfo := createStreamInfo("", SSRC(parameters.Encodings[0].RtxSSRC), 0, codec, globalParams.HeaderExtensions)
+			streamInfo.Attributes.Set(IctRTXTrackAttr, 1)
 			var err error
 			if t.rtpReadStream, t.rtpInterceptor, t.rtcpReadStream, t.rtcpInterceptor, err = r.streamsForSSRC(SSRC(parameters.Encodings[0].RtxSSRC), streamInfo); err != nil {
 				return err

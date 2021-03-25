@@ -64,7 +64,7 @@ func (api *API) NewRTPSender(track TrackLocal, transport *DTLSTransport) (*RTPSe
 		if !rtx && strings.HasSuffix(c.MimeType, "rtx") {
 			rtx = true
 		}
-		if !fec && strings.HasSuffix(c.MimeType, "fec") {
+		if !fec && (strings.HasSuffix(c.MimeType, "fec") || strings.Contains(c.MimeType, "flexfec")) {
 			fec = true
 		}
 		if rtx && fec {
@@ -201,10 +201,10 @@ func (r *RTPSender) Send(parameters RTPSendParameters) error {
 
 	streamInfo := createStreamInfo(r.id, parameters.Encodings[0].SSRC, codec.PayloadType, codec.RTPCodecCapability, parameters.HeaderExtensions)
 	if r.fec != 0 {
-		streamInfo.Attributes.Set(IctFECSSRCAttr, r.fec)
+		streamInfo.Attributes.Set(IctFECSSRCAttr, uint32(r.fec))
 	}
 	if r.rtx != 0 {
-		streamInfo.Attributes.Set(IctRTXSSRCAttr, r.rtx)
+		streamInfo.Attributes.Set(IctRTXSSRCAttr, uint32(r.rtx))
 	}
 
 	rtpInterceptor := r.api.interceptor.BindLocalStream(&streamInfo, interceptor.RTPWriterFunc(func(header *rtp.Header, payload []byte, attributes interceptor.Attributes) (int, error) {

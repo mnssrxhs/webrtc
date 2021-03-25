@@ -388,14 +388,18 @@ func addTransceiverSDP(d *sdp.SessionDescription, isPlanB, shouldAddCandidates b
 			// add rtx & fec group
 			if mt.Sender().rtx != 0 {
 				media = media.WithValueAttribute("ssrc-group", fmt.Sprintf("FID %d %d", mt.Sender().ssrc, mt.Sender().rtx))
-				media = media.WithMediaSource(uint32(mt.Sender().rtx), track.StreamID() /* cname */, track.StreamID() /* streamLabel */, track.ID())
 			}
 			if mt.Sender().fec != 0 {
 				media = media.WithValueAttribute("ssrc-group", fmt.Sprintf("FEC-FR %d %d", mt.Sender().ssrc, mt.Sender().fec))
-				media = media.WithMediaSource(uint32(mt.Sender().fec), track.StreamID() /* cname */, track.StreamID() /* streamLabel */, track.ID())
 			}
 
 			media = media.WithMediaSource(uint32(mt.Sender().ssrc), track.StreamID() /* cname */, track.StreamID() /* streamLabel */, track.ID())
+			if mt.Sender().rtx != 0 {
+				media = media.WithMediaSource(uint32(mt.Sender().rtx), track.StreamID() /* cname */, track.StreamID() /* streamLabel */, track.ID())
+			}
+			if mt.Sender().fec != 0 {
+				media = media.WithMediaSource(uint32(mt.Sender().fec), track.StreamID() /* cname */, track.StreamID() /* streamLabel */, track.ID())
+			}
 			if !isPlanB {
 				media = media.WithPropertyAttribute("msid:" + track.StreamID() + " " + track.ID())
 				break

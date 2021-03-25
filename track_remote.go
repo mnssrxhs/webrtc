@@ -27,6 +27,8 @@ type TrackRemote struct {
 	receiver         *RTPReceiver
 	peeked           []byte
 	peekedAttributes interceptor.Attributes
+
+	isFec, isRtx bool
 }
 
 func newTrackRemote(kind RTPCodecType, ssrc SSRC, rid string, receiver *RTPReceiver) *TrackRemote {
@@ -180,4 +182,14 @@ func (t *TrackRemote) peek(b []byte) (n int, a interceptor.Attributes, err error
 // SetReadDeadline sets the max amount of time the RTP stream will block before returning. 0 is forever.
 func (t *TrackRemote) SetReadDeadline(deadline time.Time) error {
 	return t.receiver.setRTPReadDeadline(deadline, t)
+}
+
+// IsFec : is a fec track
+func (t *TrackRemote) IsFec() bool {
+	return t.isFec
+}
+
+// IsRtx: is a rtx track
+func (t *TrackRemote) IsRtx() bool {
+	return t.isRtx
 }
