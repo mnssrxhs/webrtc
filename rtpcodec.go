@@ -97,23 +97,23 @@ const (
 // Used for lookup up a codec in an existing list to find a match
 // Returns codecMatchExact, codecMatchPartial, or codecMatchNone
 func codecParametersFuzzySearch(needle RTPCodecParameters, haystack []RTPCodecParameters) (RTPCodecParameters, codecMatchType) {
+	needleFmtp := parseFmtp(needle.RTPCodecCapability.SDPFmtpLine)
+
 	// First attempt to match on MimeType + SDPFmtpLine
-	// Exact matches means fmtp line cannot be empty
 	for _, c := range haystack {
 		// remote mime type will prefix with media kind,so check with suffix
 		if (strings.EqualFold(c.RTPCodecCapability.MimeType, needle.RTPCodecCapability.MimeType) ||
 			strings.HasSuffix(needle.RTPCodecCapability.MimeType, c.RTPCodecCapability.MimeType)) &&
-			c.RTPCodecCapability.SDPFmtpLine == needle.RTPCodecCapability.SDPFmtpLine {
+			fmtpConsist(needleFmtp, parseFmtp(c.RTPCodecCapability.SDPFmtpLine)) {
 			return c, codecMatchExact
 		}
 	}
 
-	// Fallback to just MimeType if either haystack or needle does not have fmtpline set
+	// Fallback to just MimeType
 	for _, c := range haystack {
 		// remote mime type will prefix with media kind,so check with suffix
-		if (strings.EqualFold(c.RTPCodecCapability.MimeType, needle.RTPCodecCapability.MimeType) ||
-			strings.HasSuffix(needle.RTPCodecCapability.MimeType, c.RTPCodecCapability.MimeType)) &&
-			(c.RTPCodecCapability.SDPFmtpLine == "" || needle.RTPCodecCapability.SDPFmtpLine == "") {
+		if strings.EqualFold(c.RTPCodecCapability.MimeType, needle.RTPCodecCapability.MimeType) ||
+			strings.HasSuffix(needle.RTPCodecCapability.MimeType, c.RTPCodecCapability.MimeType) {
 			return c, codecMatchPartial
 		}
 	}

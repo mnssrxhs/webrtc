@@ -26,6 +26,8 @@ const (
 type trackStreams struct {
 	track *TrackRemote
 
+	streamInfo interceptor.StreamInfo
+
 	rtpReadStream  *srtp.ReadStreamSRTP
 	rtpInterceptor interceptor.RTPReader
 
@@ -161,18 +163,17 @@ func (r *RTPReceiver) Receive(parameters RTPReceiveParameters) error {
 			codec = globalParams.Codecs[0].RTPCodecCapability
 		}
 
-		streamInfo := createStreamInfo("", parameters.Encodings[0].SSRC, 0, codec, globalParams.HeaderExtensions)
-
+		t.streamInfo = createStreamInfo("", parameters.Encodings[0].SSRC, 0, codec, globalParams.HeaderExtensions)
 		// fec & rtx
 		if parameters.Encodings[0].FecSSRC != 0 {
-			streamInfo.Attributes.Set(IctFECSSRCAttr, uint32(parameters.Encodings[0].FecSSRC))
+			t.streamInfo.Attributes.Set(IctFECSSRCAttr, uint32(parameters.Encodings[0].FecSSRC))
 		}
 		if parameters.Encodings[0].RtxSSRC != 0 {
-			streamInfo.Attributes.Set(IctRTXSSRCAttr, uint32(parameters.Encodings[0].RtxSSRC))
+			t.streamInfo.Attributes.Set(IctRTXSSRCAttr, uint32(parameters.Encodings[0].RtxSSRC))
 		}
 
 		var err error
-		if t.rtpReadStream, t.rtpInterceptor, t.rtcpReadStream, t.rtcpInterceptor, err = r.streamsForSSRC(parameters.Encodings[0].SSRC, streamInfo); err != nil {
+		if t.rtpReadStream, t.rtpInterceptor, t.rtcpReadStream, t.rtcpInterceptor, err = r.streamsForSSRC(parameters.Encodings[0].SSRC, t.streamInfo); err != nil {
 			return err
 		}
 
@@ -321,6 +322,7 @@ func (r *RTPReceiver) Stop() error {
 			}
 
 			err = util.FlattenErrs(errs)
+			r.api.interceptor.UnbindRemoteStream(&r.tracks[i].streamInfo)
 		}
 	default:
 	}
@@ -368,11 +370,11 @@ func (r *RTPReceiver) receiveForRid(rid string, params RTPParameters, ssrc SSRC)
 			r.tracks[i].track.codec = params.Codecs[0]
 			r.tracks[i].track.params = params
 			r.tracks[i].track.ssrc = ssrc
-			streamInfo := createStreamInfo("", ssrc, params.Codecs[0].PayloadType, params.Codecs[0].RTPCodecCapability, params.HeaderExtensions)
+			r.tracks[i].streamInfo = createStreamInfo("", ssrc, params.Codecs[0].PayloadType, params.Codecs[0].RTPCodecCapability, params.HeaderExtensions)
 			r.tracks[i].track.mu.Unlock()
 
 			var err error
-			if r.tracks[i].rtpReadStream, r.tracks[i].rtpInterceptor, r.tracks[i].rtcpReadStream, r.tracks[i].rtcpInterceptor, err = r.streamsForSSRC(ssrc, streamInfo); err != nil {
+			if r.tracks[i].rtpReadStream, r.tracks[i].rtpInterceptor, r.tracks[i].rtcpReadStream, r.tracks[i].rtcpInterceptor, err = r.streamsForSSRC(ssrc, r.tracks[i].streamInfo); err != nil {
 				return nil, err
 			}
 
