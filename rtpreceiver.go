@@ -321,6 +321,25 @@ func (r *RTPReceiver) Stop() error {
 				errs = append(errs, r.tracks[i].rtpReadStream.Close())
 			}
 
+			// close fec & rtx
+			closefunc := func(t *trackStreams) []error {
+				errs := []error{}
+				if t.rtcpReadStream != nil {
+					errs = append(errs, t.rtcpReadStream.Close())
+				}
+
+				if t.rtpReadStream != nil {
+					errs = append(errs, t.rtpReadStream.Close())
+				}
+				return errs
+			}
+			if fec := r.tracks[i].fecTrack; fec != nil {
+				errs = append(errs, closefunc(fec)...)
+			}
+			if rtx := r.tracks[i].rtxTrack; rtx != nil {
+				errs = append(errs, closefunc(rtx)...)
+			}
+
 			err = util.FlattenErrs(errs)
 			r.api.interceptor.UnbindRemoteStream(&r.tracks[i].streamInfo)
 		}
