@@ -448,7 +448,6 @@ func (m *MediaEngine) updateFromRemoteDescription(desc sdp.SessionDescription) e
 		switch {
 		case len(exactMatches) > 0:
 			m.pushCodecs(exactMatches, typ)
-			fallthrough // by zj: add exact and partial both
 		case len(partialMatches) > 0:
 			m.pushCodecs(partialMatches, typ)
 		default:
