@@ -114,7 +114,8 @@ func codecParametersFuzzySearch(needle RTPCodecParameters, haystack []RTPCodecPa
 		// remote mime type will prefix with media kind,so check with suffix
 		if strings.EqualFold(c.RTPCodecCapability.MimeType, needle.RTPCodecCapability.MimeType) ||
 			strings.HasSuffix(needle.RTPCodecCapability.MimeType, c.RTPCodecCapability.MimeType) {
-			return c, codecMatchPartial
+			// return c, codecMatchPartial
+			return c, codecMatchExact // by zj : h264 partial match will cause h264 codec goto negotiationedcodec last
 		}
 	}
 
