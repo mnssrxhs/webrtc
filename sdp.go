@@ -24,6 +24,8 @@ type trackDetails struct {
 	id       string
 	ssrc     SSRC
 	rids     []string
+	fecSsrc  SSRC
+	rtxSsrc  SSRC
 }
 
 func trackDetailsForSSRC(trackDetails []trackDetails, ssrc SSRC) *trackDetails {
@@ -49,11 +51,13 @@ func filterTrackWithSSRC(incomingTracks []trackDetails, ssrc SSRC) []trackDetail
 func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) []trackDetails { // nolint:gocognit
 	incomingTracks := []trackDetails{}
 	rtxRepairFlows := map[uint32]bool{}
+	fecFlows := map[uint32]bool{}
 
 	for _, media := range s.MediaDescriptions {
 		// Plan B can have multiple tracks in a signle media section
 		streamID := ""
 		trackID := ""
+		var fecssrc, rtxssrc uint32
 
 		// If media section is recvonly or inactive skip
 		if _, ok := media.Attribute(sdp.AttrKeyRecvOnly); ok {
@@ -82,7 +86,7 @@ func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) [
 					// as this declares that the second SSRC (632943048) is a rtx repair flow (RFC4588) for the first
 					// (2231627014) as specified in RFC5576
 					if len(split) == 3 {
-						_, err := strconv.ParseUint(split[1], 10, 32)
+						ssrcMedia, err := strconv.ParseUint(split[1], 10, 32)
 						if err != nil {
 							log.Warnf("Failed to parse SSRC: %v", err)
 							continue
@@ -92,8 +96,38 @@ func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) [
 							log.Warnf("Failed to parse SSRC: %v", err)
 							continue
 						}
+						rtxssrc = uint32(rtxRepairFlow)
 						rtxRepairFlows[uint32(rtxRepairFlow)] = true
 						incomingTracks = filterTrackWithSSRC(incomingTracks, SSRC(rtxRepairFlow)) // Remove if rtx was added as track before
+						for _, v := range incomingTracks {
+							if v.ssrc == SSRC(ssrcMedia) {
+								v.rtxSsrc = SSRC(rtxssrc)
+								break
+							}
+						}
+					}
+				} else if split[0] == "FEC-FR" { // for fec flow
+					if len(split) == 3 {
+						ssrcMedia, err := strconv.ParseUint(split[1], 10, 32)
+						if err != nil {
+							log.Warnf("Failed to parse SSRC: %v", err)
+							continue
+						}
+						ssrc, err := strconv.ParseUint(split[2], 10, 32)
+						if err != nil {
+							log.Warnf("Failed to parse SSRC: %v", err)
+							continue
+						}
+						fecssrc = uint32(ssrc)
+						fecFlows[fecssrc] = true
+						incomingTracks = filterTrackWithSSRC(incomingTracks, SSRC(ssrc)) // Remove if rtx was added as track before
+
+						for _, v := range incomingTracks {
+							if v.ssrc == SSRC(ssrcMedia) {
+								v.fecSsrc = SSRC(fecssrc)
+								break
+							}
+						}
 					}
 				}
 
@@ -119,6 +153,10 @@ func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) [
 					continue // This ssrc is a RTX repair flow, ignore
 				}
 
+				if fecflow := fecFlows[uint32(ssrc)]; fecflow {
+					continue
+				}
+
 				if len(split) == 3 && strings.HasPrefix(split[1], "msid:") {
 					streamID = split[1][len("msid:"):]
 					trackID = split[2]
@@ -138,6 +176,8 @@ func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) [
 				trackDetails.streamID = streamID
 				trackDetails.id = trackID
 				trackDetails.ssrc = SSRC(ssrc)
+				trackDetails.fecSsrc = SSRC(fecssrc)
+				trackDetails.rtxSsrc = SSRC(rtxssrc)
 
 				if isNewTrack {
 					incomingTracks = append(incomingTracks, *trackDetails)
@@ -346,7 +386,22 @@ func addTransceiverSDP(d *sdp.SessionDescription, isPlanB, shouldAddCandidates b
 	for _, mt := range transceivers {
 		if mt.Sender() != nil && mt.Sender().Track() != nil {
 			track := mt.Sender().Track()
+
+			// add rtx & fec group
+			if mt.Sender().rtx != 0 {
+				media = media.WithValueAttribute("ssrc-group", fmt.Sprintf("FID %d %d", mt.Sender().ssrc, mt.Sender().rtx))
+			}
+			if mt.Sender().fec != 0 {
+				media = media.WithValueAttribute("ssrc-group", fmt.Sprintf("FEC-FR %d %d", mt.Sender().ssrc, mt.Sender().fec))
+			}
+
 			media = media.WithMediaSource(uint32(mt.Sender().ssrc), track.StreamID() /* cname */, track.StreamID() /* streamLabel */, track.ID())
+			if mt.Sender().rtx != 0 {
+				media = media.WithMediaSource(uint32(mt.Sender().rtx), track.StreamID() /* cname */, track.StreamID() /* streamLabel */, track.ID())
+			}
+			if mt.Sender().fec != 0 {
+				media = media.WithMediaSource(uint32(mt.Sender().fec), track.StreamID() /* cname */, track.StreamID() /* streamLabel */, track.ID())
+			}
 			if !isPlanB {
 				media = media.WithPropertyAttribute("msid:" + track.StreamID() + " " + track.ID())
 				break

@@ -110,7 +110,8 @@ func codecParametersFuzzySearch(needle RTPCodecParameters, haystack []RTPCodecPa
 	// Fallback to just MimeType
 	for _, c := range haystack {
 		if strings.EqualFold(c.RTPCodecCapability.MimeType, needle.RTPCodecCapability.MimeType) {
-			return c, codecMatchPartial
+			// return c, codecMatchPartial
+			return c, codecMatchExact // by zj : h264 partial match will cause h264 codec goto negotiationedcodec last
 		}
 	}
 

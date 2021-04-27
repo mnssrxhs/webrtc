@@ -1164,7 +1164,7 @@ func (pc *PeerConnection) SetRemoteDescription(desc SessionDescription) error { 
 func (pc *PeerConnection) startReceiver(incoming trackDetails, receiver *RTPReceiver) {
 	encodings := []RTPDecodingParameters{}
 	if incoming.ssrc != 0 {
-		encodings = append(encodings, RTPDecodingParameters{RTPCodingParameters{SSRC: incoming.ssrc}})
+		encodings = append(encodings, RTPDecodingParameters{RTPCodingParameters{SSRC: incoming.ssrc, FecSSRC: incoming.fecSsrc, RtxSSRC: incoming.rtxSsrc}})
 	}
 	for _, rid := range incoming.rids {
 		encodings = append(encodings, RTPDecodingParameters{RTPCodingParameters{RID: rid}})
@@ -1208,7 +1208,41 @@ func (pc *PeerConnection) startReceiver(incoming trackDetails, receiver *RTPRece
 		receiver.Track().mu.Unlock()
 
 		pc.onTrack(receiver.Track(), receiver)
+
+		go func() {
+			// determine rtx payload
+			if rtx := receiver.RtxTrack(); rtx != nil {
+				if err := rtx.determinePayloadType(); err != nil {
+					pc.log.Warnf("Could not determine Rtx PayloadType for SSRC %d", rtx.SSRC())
+					return
+				}
+
+				rtx.mu.Lock()
+				rtx.kind = receiver.kind
+				// rtx.codec = codec
+				// rtx.srcTrack = receiver.Track()
+				rtx.mu.Unlock()
+				pc.onTrack(rtx, receiver)
+			}
+
+		}()
+
+		// determine fec payload
+		if fec := receiver.FecTrack(); fec != nil {
+			if err := fec.determinePayloadType(); err != nil {
+				pc.log.Warnf("Could not determine Fec PayloadType for SSRC %d", fec.SSRC())
+				return
+			}
+
+			fec.mu.Lock()
+			fec.kind = receiver.kind
+			// fec.codec = codec
+			// fec.srcTrack = receiver.Track()
+			fec.mu.Unlock()
+			pc.onTrack(fec, receiver)
+		}
 	}()
+
 }
 
 // startRTPReceivers opens knows inbound SRTP streams from the RemoteDescription
