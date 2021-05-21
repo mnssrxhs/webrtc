@@ -1515,11 +1515,15 @@ func (pc *PeerConnection) undeclaredMediaProcessor() {
 				return
 			}
 
-			_, ssrc, err := srtcpSession.AcceptStream()
+			s, ssrc, err := srtcpSession.AcceptStream()
 			if err != nil {
 				pc.log.Warnf("Failed to accept RTCP %v", err)
 				return
 			}
+			time.AfterFunc(5*time.Minute, func() {
+				s.Close()
+			})
+
 			pc.log.Warnf("Incoming unhandled RTCP ssrc(%d), OnTrack will not be fired", ssrc)
 		}
 	}()

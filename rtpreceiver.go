@@ -335,9 +335,11 @@ func (r *RTPReceiver) Stop() error {
 			}
 			if fec := r.tracks[i].fecTrack; fec != nil {
 				errs = append(errs, closefunc(fec)...)
+				r.api.interceptor.UnbindRemoteStream(&fec.streamInfo)
 			}
 			if rtx := r.tracks[i].rtxTrack; rtx != nil {
 				errs = append(errs, closefunc(rtx)...)
+				r.api.interceptor.UnbindRemoteStream(&rtx.streamInfo)
 			}
 
 			err = util.FlattenErrs(errs)
