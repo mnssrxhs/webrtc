@@ -1320,13 +1320,13 @@ func (pc *PeerConnection) startRTPReceivers(incomingTracks []trackDetails, curre
 // startRTPSenders starts all outbound RTP streams
 func (pc *PeerConnection) startRTPSenders(currentTransceivers []*RTPTransceiver) error {
 	for _, transceiver := range currentTransceivers {
-		if transceiver.Sender() != nil && transceiver.Sender().isNegotiated() && !transceiver.Sender().hasSent() {
-			err := transceiver.Sender().Send(RTPSendParameters{
+		if sender := transceiver.Sender(); sender != nil && sender.isNegotiated() && !sender.hasSent() {
+			err := sender.Send(RTPSendParameters{
 				Encodings: []RTPEncodingParameters{
 					{
 						RTPCodingParameters{
-							SSRC:        transceiver.Sender().ssrc,
-							PayloadType: transceiver.Sender().payloadType,
+							SSRC:        sender.ssrc,
+							PayloadType: sender.payloadType,
 						},
 					},
 				},
