@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -213,6 +214,13 @@ func (t *DTLSTransport) startSRTP() error {
 		return fmt.Errorf("%w: %v", errDtlsKeyExtractionFailed, err)
 	}
 
+	t.log.Infof("local ctx master key&salt: %s ",
+		base64.StdEncoding.EncodeToString(append(srtpConfig.Keys.LocalMasterKey,
+			srtpConfig.Keys.LocalMasterSalt...)))
+	t.log.Infof("remote ctx master key&salt: %s ",
+		base64.StdEncoding.EncodeToString(append(srtpConfig.Keys.RemoteMasterKey,
+			srtpConfig.Keys.RemoteMasterSalt...)))
+
 	srtpSession, err := srtp.NewSessionSRTP(t.srtpEndpoint, srtpConfig)
 	if err != nil {
 		return fmt.Errorf("%w: %v", errFailedToStartSRTP, err)
@@ -305,6 +313,7 @@ func (t *DTLSTransport) Start(remoteParameters DTLSParameters) error {
 			ClientAuth:             dtls.RequireAnyClientCert,
 			LoggerFactory:          t.api.settingEngine.LoggerFactory,
 			InsecureSkipVerify:     true,
+			FlightInterval:         100 * time.Millisecond, // 握手消息重发时间
 		}, nil
 	}
 
