@@ -71,6 +71,7 @@ type PeerConnection struct {
 	onTrackHandler                    func(*TrackRemote, *RTPReceiver)
 	onDataChannelHandler              func(*DataChannel)
 	onNegotiationNeededHandler        atomic.Value // func()
+	onUnhandledRtcpHandler            func(interceptor.RTCPReader)
 
 	iceGatherer   *ICEGatherer
 	iceTransport  *ICETransport
@@ -453,6 +454,29 @@ func (pc *PeerConnection) onTrack(t *TrackRemote, r *RTPReceiver) {
 			pc.log.Warnf("OnTrack unset, unable to handle incoming media streams")
 		}
 	}
+}
+
+func (pc *PeerConnection) OnUnhandledRtcp(f func(interceptor.RTCPReader)) {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	pc.onUnhandledRtcpHandler = f
+}
+
+func (pc *PeerConnection) onUnhandledRtcp(r interceptor.RTCPReader, ssrc uint32) bool {
+	pc.mu.RLock()
+	h := pc.onUnhandledRtcpHandler
+	pc.mu.RUnlock()
+	pc.log.Debugf("got new unhandled rtcp: %+v", r)
+	if r != nil {
+		if h != nil {
+			go h(r)
+			return true
+		} else {
+			// pc.log.Warnf("OnTrack unset, unable to handle incoming media streams")
+			pc.log.Warnf("Incoming unhandled RTCP ssrc(%d), OnUnhandledRtcp is nil, will not be fired, ssrc: %d", ssrc)
+		}
+	}
+	return false
 }
 
 // OnICEConnectionStateChange sets an event handler which is called
@@ -1520,10 +1544,15 @@ func (pc *PeerConnection) undeclaredMediaProcessor() {
 				pc.log.Warnf("Failed to accept RTCP %v", err)
 				return
 			}
-			time.AfterFunc(5*time.Minute, func() {
-				s.Close()
-			})
-
+			r := pc.api.interceptor.BindRTCPReader(interceptor.RTCPReaderFunc(func(b []byte, a interceptor.Attributes) (int, interceptor.Attributes, error) {
+				n, err := s.Read(b)
+				return n, a, err
+			}))
+			if !pc.onUnhandledRtcp(r, ssrc) {
+				time.AfterFunc(5*time.Minute, func() {
+					s.Close()
+				})
+			}
 			pc.log.Warnf("Incoming unhandled RTCP ssrc(%d), OnTrack will not be fired", ssrc)
 		}
 	}()
