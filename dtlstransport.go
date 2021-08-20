@@ -309,7 +309,7 @@ func (t *DTLSTransport) Start(remoteParameters DTLSParameters) error {
 					PrivateKey:  cert.privateKey,
 				},
 			},
-			SRTPProtectionProfiles: []dtls.SRTPProtectionProfile{dtls.SRTP_AEAD_AES_128_GCM, dtls.SRTP_AES128_CM_HMAC_SHA1_80},
+			SRTPProtectionProfiles: []dtls.SRTPProtectionProfile{dtls.SRTP_UNENCRYPTED, dtls.SRTP_AEAD_AES_128_GCM, dtls.SRTP_AES128_CM_HMAC_SHA1_80},
 			ClientAuth:             dtls.RequireAnyClientCert,
 			LoggerFactory:          t.api.settingEngine.LoggerFactory,
 			InsecureSkipVerify:     true,
@@ -356,6 +356,8 @@ func (t *DTLSTransport) Start(remoteParameters DTLSParameters) error {
 		t.srtpProtectionProfile = srtp.ProtectionProfileAeadAes128Gcm
 	case dtls.SRTP_AES128_CM_HMAC_SHA1_80:
 		t.srtpProtectionProfile = srtp.ProtectionProfileAes128CmHmacSha1_80
+	case dtls.SRTP_UNENCRYPTED:
+		t.srtpProtectionProfile = srtp.ProtectionProfileUnencrypted
 	default:
 		t.onStateChange(DTLSTransportStateFailed)
 		return ErrNoSRTPProtectionProfile

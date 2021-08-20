@@ -21,3 +21,7 @@ require (
 	github.com/stretchr/testify v1.7.0
 	golang.org/x/net v0.0.0-20210420210106-798c2154c571
 )
+
+replace github.com/pion/srtp/v2 v2.0.2 => github.com/cnderrauber/srtp v2.0.6
+
+replace github.com/pion/dtls/v2 v2.0.9 => github.com/cnderrauber/dtls v2.0.10
