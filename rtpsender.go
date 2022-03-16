@@ -3,6 +3,7 @@
 package webrtc
 
 import (
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -17,9 +18,10 @@ import (
 type RTPSender struct {
 	track TrackLocal
 
-	srtpStream      *srtpWriterFuture
-	rtcpInterceptor interceptor.RTCPReader
-	streamInfo      interceptor.StreamInfo
+	repairSrtpStream *srtpWriterFuture
+	srtpStream       *srtpWriterFuture
+	rtcpInterceptor  interceptor.RTCPReader
+	streamInfo       interceptor.StreamInfo
 
 	context TrackLocalContext
 
@@ -76,6 +78,36 @@ func (api *API) NewRTPSender(track TrackLocal, transport *DTLSTransport) (*RTPSe
 	}))
 
 	return r, nil
+}
+
+func (r *RTPSender) ReadRtxRtcp(rtxSSRC SSRC) {
+	snd := &RTPSender{
+		transport:  r.transport,
+		stopCalled: r.stopCalled,
+		ssrc:       rtxSSRC,
+	}
+
+	r.repairSrtpStream = &srtpWriterFuture{}
+	r.repairSrtpStream.rtpSender = snd
+	repairRtcpInterceptor := r.api.interceptor.BindRTCPReader(interceptor.RTPReaderFunc(func(in []byte, a interceptor.Attributes) (n int, attributes interceptor.Attributes, err error) {
+		n, err = r.repairSrtpStream.Read(in)
+		return n, a, err
+	}))
+
+	go func() {
+		repairRtcpBuffer := make([]byte, 1500)
+		for {
+			select {
+			case <-r.sendCalled:
+				_, _, err := repairRtcpInterceptor.Read(repairRtcpBuffer, nil)
+				if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF) {
+					return
+				}
+			case <-r.stopCalled:
+				return
+			}
+		}
+	}()
 }
 
 func (r *RTPSender) isNegotiated() bool {
@@ -243,6 +275,11 @@ func (r *RTPSender) Stop() error {
 
 	r.api.interceptor.UnbindLocalStream(&r.streamInfo)
 
+	if r.repairSrtpStream != nil {
+		if err := r.repairSrtpStream.Close(); err != nil {
+			return err
+		}
+	}
 	return r.srtpStream.Close()
 }
 
