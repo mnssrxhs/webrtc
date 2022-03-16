@@ -1,3 +1,5 @@
+// +build !js
+
 package main
 
 import (
@@ -7,7 +9,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/pion/randutil"
 	"github.com/pion/webrtc/v3"
 	"github.com/pion/webrtc/v3/examples/internal/signal"
 	"github.com/pion/webrtc/v3/pkg/media"
@@ -16,8 +17,9 @@ import (
 )
 
 const (
-	audioFileName = "output.ogg"
-	videoFileName = "output.ivf"
+	audioFileName   = "output.ogg"
+	videoFileName   = "output.ivf"
+	oggPageDuration = time.Millisecond * 20
 )
 
 func main() {
@@ -32,20 +34,8 @@ func main() {
 		panic("Could not find `" + audioFileName + "` or `" + videoFileName + "`")
 	}
 
-	// Wait for the offer to be pasted
-	offer := webrtc.SessionDescription{}
-	signal.Decode(signal.MustReadStdin(), &offer)
-
-	// We make our own mediaEngine so we can place the sender's codecs in it.  This because we must use the
-	// dynamic media type from the sender in our answer. This is not required if we are the offerer
-	mediaEngine := webrtc.MediaEngine{}
-	if err = mediaEngine.PopulateFromSDP(offer); err != nil {
-		panic(err)
-	}
-
 	// Create a new RTCPeerConnection
-	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine))
-	peerConnection, err := api.NewPeerConnection(webrtc.Configuration{
+	peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{
 				URLs: []string{"stun:stun.l.google.com:19302"},
@@ -55,17 +45,37 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	defer func() {
+		if cErr := peerConnection.Close(); cErr != nil {
+			fmt.Printf("cannot close peerConnection: %v\n", cErr)
+		}
+	}()
+
 	iceConnectedCtx, iceConnectedCtxCancel := context.WithCancel(context.Background())
 
 	if haveVideoFile {
 		// Create a video track
-		videoTrack, addTrackErr := peerConnection.NewTrack(getPayloadType(mediaEngine, webrtc.RTPCodecTypeVideo, "VP8"), randutil.NewMathRandomGenerator().Uint32(), "video", "pion")
-		if addTrackErr != nil {
-			panic(addTrackErr)
+		videoTrack, videoTrackErr := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8}, "video", "pion")
+		if videoTrackErr != nil {
+			panic(videoTrackErr)
 		}
-		if _, addTrackErr = peerConnection.AddTrack(videoTrack); addTrackErr != nil {
-			panic(addTrackErr)
+
+		rtpSender, videoTrackErr := peerConnection.AddTrack(videoTrack)
+		if videoTrackErr != nil {
+			panic(videoTrackErr)
 		}
+
+		// Read incoming RTCP packets
+		// Before these packets are returned they are processed by interceptors. For things
+		// like NACK this needs to be called.
+		go func() {
+			rtcpBuf := make([]byte, 1500)
+			for {
+				if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+					return
+				}
+			}
+		}()
 
 		go func() {
 			// Open a IVF file and start reading using our IVFReader
@@ -84,8 +94,12 @@ func main() {
 
 			// Send our video file frame at a time. Pace our sending so we send it at the same speed it should be played back as.
 			// This isn't required since the video is timestamped, but we will such much higher loss if we send all at once.
-			sleepTime := time.Millisecond * time.Duration((float32(header.TimebaseNumerator)/float32(header.TimebaseDenominator))*1000)
-			for {
+			//
+			// It is important to use a time.Ticker instead of time.Sleep because
+			// * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
+			// * works around latency issues with Sleep (see https://github.com/golang/go/issues/44343)
+			ticker := time.NewTicker(time.Millisecond * time.Duration((float32(header.TimebaseNumerator)/float32(header.TimebaseDenominator))*1000))
+			for ; true; <-ticker.C {
 				frame, _, ivfErr := ivf.ParseNextFrame()
 				if ivfErr == io.EOF {
 					fmt.Printf("All video frames parsed and sent")
@@ -96,8 +110,7 @@ func main() {
 					panic(ivfErr)
 				}
 
-				time.Sleep(sleepTime)
-				if ivfErr = videoTrack.WriteSample(media.Sample{Data: frame, Samples: 90000}); ivfErr != nil {
+				if ivfErr = videoTrack.WriteSample(media.Sample{Data: frame, Duration: time.Second}); ivfErr != nil {
 					panic(ivfErr)
 				}
 			}
@@ -106,16 +119,30 @@ func main() {
 
 	if haveAudioFile {
 		// Create a audio track
-		audioTrack, addTrackErr := peerConnection.NewTrack(getPayloadType(mediaEngine, webrtc.RTPCodecTypeAudio, "opus"), randutil.NewMathRandomGenerator().Uint32(), "audio", "pion")
-		if addTrackErr != nil {
-			panic(addTrackErr)
-		}
-		if _, addTrackErr = peerConnection.AddTrack(audioTrack); addTrackErr != nil {
-			panic(addTrackErr)
+		audioTrack, audioTrackErr := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "pion")
+		if audioTrackErr != nil {
+			panic(audioTrackErr)
 		}
 
+		rtpSender, audioTrackErr := peerConnection.AddTrack(audioTrack)
+		if audioTrackErr != nil {
+			panic(audioTrackErr)
+		}
+
+		// Read incoming RTCP packets
+		// Before these packets are returned they are processed by interceptors. For things
+		// like NACK this needs to be called.
 		go func() {
-			// Open a IVF file and start reading using our IVFReader
+			rtcpBuf := make([]byte, 1500)
+			for {
+				if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+					return
+				}
+			}
+		}()
+
+		go func() {
+			// Open a OGG file and start reading using our OGGReader
 			file, oggErr := os.Open(audioFileName)
 			if oggErr != nil {
 				panic(oggErr)
@@ -132,7 +159,12 @@ func main() {
 
 			// Keep track of last granule, the difference is the amount of samples in the buffer
 			var lastGranule uint64
-			for {
+
+			// It is important to use a time.Ticker instead of time.Sleep because
+			// * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
+			// * works around latency issues with Sleep (see https://github.com/golang/go/issues/44343)
+			ticker := time.NewTicker(oggPageDuration)
+			for ; true; <-ticker.C {
 				pageData, pageHeader, oggErr := ogg.ParseNextPage()
 				if oggErr == io.EOF {
 					fmt.Printf("All audio pages parsed and sent")
@@ -146,13 +178,11 @@ func main() {
 				// The amount of samples is the difference between the last and current timestamp
 				sampleCount := float64(pageHeader.GranulePosition - lastGranule)
 				lastGranule = pageHeader.GranulePosition
+				sampleDuration := time.Duration((sampleCount/48000)*1000) * time.Millisecond
 
-				if oggErr = audioTrack.WriteSample(media.Sample{Data: pageData, Samples: uint32(sampleCount)}); oggErr != nil {
+				if oggErr = audioTrack.WriteSample(media.Sample{Data: pageData, Duration: sampleDuration}); oggErr != nil {
 					panic(oggErr)
 				}
-
-				// Convert seconds to Milliseconds, Sleep doesn't accept floats
-				time.Sleep(time.Duration((sampleCount/48000)*1000) * time.Millisecond)
 			}
 		}()
 	}
@@ -165,6 +195,24 @@ func main() {
 			iceConnectedCtxCancel()
 		}
 	})
+
+	// Set the handler for Peer connection state
+	// This will notify you when the peer has connected/disconnected
+	peerConnection.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
+		fmt.Printf("Peer Connection State has changed: %s\n", s.String())
+
+		if s == webrtc.PeerConnectionStateFailed {
+			// Wait until PeerConnection has had no network activity for 30 seconds or another failure. It may be reconnected using an ICE Restart.
+			// Use webrtc.PeerConnectionStateDisconnected if you are interested in detecting faster timeout.
+			// Note that the PeerConnection may come back from PeerConnectionStateDisconnected.
+			fmt.Println("Peer Connection has gone to failed exiting")
+			os.Exit(0)
+		}
+	})
+
+	// Wait for the offer to be pasted
+	offer := webrtc.SessionDescription{}
+	signal.Decode(signal.MustReadStdin(), &offer)
 
 	// Set the remote SessionDescription
 	if err = peerConnection.SetRemoteDescription(offer); err != nil {
@@ -195,16 +243,4 @@ func main() {
 
 	// Block forever
 	select {}
-}
-
-// Search for Codec PayloadType
-//
-// Since we are answering we need to match the remote PayloadType
-func getPayloadType(m webrtc.MediaEngine, codecType webrtc.RTPCodecType, codecName string) uint8 {
-	for _, codec := range m.GetCodecsByKind(codecType) {
-		if codec.Name == codecName {
-			return codec.PayloadType
-		}
-	}
-	panic(fmt.Sprintf("Remote peer does not support %s", codecName))
 }

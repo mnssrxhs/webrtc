@@ -129,6 +129,31 @@ var (
 	// ErrFailedToGenerateCertificateFingerprint indicates that we failed to generate the fingerprint used for comparing certificates
 	ErrFailedToGenerateCertificateFingerprint = errors.New("failed to generate certificate fingerprint")
 
+	// ErrNoCodecsAvailable indicates that operation isn't possible because the MediaEngine has no codecs available
+	ErrNoCodecsAvailable = errors.New("operation failed no codecs are available")
+
+	// ErrUnsupportedCodec indicates the remote peer doesn't support the requested codec
+	ErrUnsupportedCodec = errors.New("unable to start track, codec is not supported by remote")
+
+	// ErrSenderWithNoCodecs indicates that a RTPSender was created without any codecs. To send media the MediaEngine needs at
+	// least one configured codec.
+	ErrSenderWithNoCodecs = errors.New("unable to populate media section, RTPSender created with no codecs")
+
+	// ErrRTPSenderNewTrackHasIncorrectKind indicates that the new track is of a different kind than the previous/original
+	ErrRTPSenderNewTrackHasIncorrectKind = errors.New("new track must be of the same kind as previous")
+
+	// ErrUnbindFailed indicates that a TrackLocal was not able to be unbind
+	ErrUnbindFailed = errors.New("failed to unbind TrackLocal from PeerConnection")
+
+	// ErrNoPayloaderForCodec indicates that the requested codec does not have a payloader
+	ErrNoPayloaderForCodec = errors.New("the requested codec does not have a payloader")
+
+	// ErrRegisterHeaderExtensionInvalidDirection indicates that a extension was registered with a direction besides `sendonly` or `recvonly`
+	ErrRegisterHeaderExtensionInvalidDirection = errors.New("a header extension must be registered as 'recvonly', 'sendonly' or both")
+
+	// ErrSimulcastProbeOverflow indicates that too many Simulcast probe streams are in flight and the requested SSRC was ignored
+	ErrSimulcastProbeOverflow = errors.New("simulcast probe limit has been reached, new SSRC has been discarded")
+
 	errDetachNotEnabled                 = errors.New("enable detaching by calling webrtc.DetachDataChannels()")
 	errDetachBeforeOpened               = errors.New("datachannel not opened yet, try calling Detach from OnOpen")
 	errDtlsTransportNotStarted          = errors.New("the DTLS transport has not started yet")
@@ -149,9 +174,7 @@ var (
 	errICEProtocolUnknown             = errors.New("unknown protocol")
 	errICEGathererNotStarted          = errors.New("gatherer not started")
 
-	errMediaEngineParseError    = errors.New("format parse error")
-	errMediaEngineCodecNotFound = errors.New("could not find codec")
-	errNetworkTypeUnknown       = errors.New("unknown network type")
+	errNetworkTypeUnknown = errors.New("unknown network type")
 
 	errSDPDoesNotMatchOffer                           = errors.New("new sdp does not match previous offer")
 	errSDPDoesNotMatchAnswer                          = errors.New("new sdp does not match previous answer")
@@ -163,40 +186,35 @@ var (
 	errPeerConnRemoteDescriptionNil                   = errors.New("remoteDescription has not been set yet")
 	errPeerConnSingleMediaSectionHasExplicitSSRC      = errors.New("single media section has an explicit SSRC")
 	errPeerConnRemoteSSRCAddTransceiver               = errors.New("could not add transceiver for remote SSRC")
-	errPeerConnSimulcastMidAndRidRTPExtensionRequired = errors.New("mid and rid RTP Extensions required for Simulcast")
+	errPeerConnSimulcastMidRTPExtensionRequired       = errors.New("mid RTP Extensions required for Simulcast")
+	errPeerConnSimulcastStreamIDRTPExtensionRequired  = errors.New("stream id RTP Extensions required for Simulcast")
 	errPeerConnSimulcastIncomingSSRCFailed            = errors.New("incoming SSRC failed Simulcast probing")
-	errPeerConnAddTransceiverFromKindOnlyAcceptsOne   = errors.New("AddTransceiverFromKind only accepts one RtpTransceiverInit")
-	errPeerConnAddTransceiverFromTrackOnlyAcceptsOne  = errors.New("AddTransceiverFromTrack only accepts one RtpTransceiverInit")
-	errPeerConnCodecsNotFound                         = errors.New("no codecs found")
-	errPeerConnAddTransceiverFromKindSupport          = errors.New("AddTransceiverFromKind currently only supports recvonly and sendrecv")
-	errPeerConnAddTransceiverFromTrackOneTransceiver  = errors.New("AddTransceiverFromTrack only accepts one RtpTransceiverInit")
+	errPeerConnAddTransceiverFromKindOnlyAcceptsOne   = errors.New("AddTransceiverFromKind only accepts one RTPTransceiverInit")
+	errPeerConnAddTransceiverFromTrackOnlyAcceptsOne  = errors.New("AddTransceiverFromTrack only accepts one RTPTransceiverInit")
+	errPeerConnAddTransceiverFromKindSupport          = errors.New("AddTransceiverFromKind currently only supports recvonly")
+	errPeerConnAddTransceiverFromTrackSupport         = errors.New("AddTransceiverFromTrack currently only supports sendonly and sendrecv")
 	errPeerConnSetIdentityProviderNotImplemented      = errors.New("TODO SetIdentityProvider")
 	errPeerConnWriteRTCPOpenWriteStream               = errors.New("WriteRTCP failed to open WriteStream")
-	errPeerConnCodecPayloaderNotSet                   = errors.New("codec payloader not set")
 	errPeerConnTranscieverMidNil                      = errors.New("cannot find transceiver with mid")
 
 	errRTPReceiverDTLSTransportNil            = errors.New("DTLSTransport must not be nil")
 	errRTPReceiverReceiveAlreadyCalled        = errors.New("Receive has already been called")
 	errRTPReceiverWithSSRCTrackStreamNotFound = errors.New("unable to find stream for Track with SSRC")
-	errRTPReceiverForSSRCTrackStreamNotFound  = errors.New("no trackStreams found for SSRC")
 	errRTPReceiverForRIDTrackStreamNotFound   = errors.New("no trackStreams found for RID")
 
-	errRTPSenderTrackNil                   = errors.New("Track must not be nil")
-	errRTPSenderDTLSTransportNil           = errors.New("DTLSTransport must not be nil")
-	errRTPSenderCannotConstructRemoteTrack = errors.New("RTPSender can not be constructed with remote track")
-	errRTPSenderSendAlreadyCalled          = errors.New("Send has already been called")
-	errRTPSenderStopped                    = errors.New("RTPSender has been stopped")
+	errRTPSenderTrackNil          = errors.New("Track must not be nil")
+	errRTPSenderDTLSTransportNil  = errors.New("DTLSTransport must not be nil")
+	errRTPSenderSendAlreadyCalled = errors.New("Send has already been called")
 
 	errRTPTransceiverCannotChangeMid        = errors.New("errRTPSenderTrackNil")
 	errRTPTransceiverSetSendingInvalidState = errors.New("invalid state change in RTPTransceiver.setSending")
+	errRTPTransceiverCodecUnsupported       = errors.New("unsupported codec type by this transceiver")
 
 	errSCTPTransportDTLS = errors.New("DTLS not established")
 
 	errSDPZeroTransceivers                 = errors.New("addTransceiverSDP() called with 0 transceivers")
 	errSDPMediaSectionMediaDataChanInvalid = errors.New("invalid Media Section. Media + DataChannel both enabled")
 	errSDPMediaSectionMultipleTrackInvalid = errors.New("invalid Media Section. Can not have multiple tracks in one MediaSection in UnifiedPlan")
-	errSDPParseExtMap                      = errors.New("failed to parse ExtMap")
-	errSDPRemoteDescriptionChangedExtMap   = errors.New("RemoteDescription changed some extmaps values")
 
 	errSettingEngineSetAnsweringDTLSRole = errors.New("SetAnsweringDTLSRole must DTLSRoleClient or DTLSRoleServer")
 
@@ -205,7 +223,11 @@ var (
 
 	errStatsICECandidateStateInvalid = errors.New("cannot convert to StatsICECandidatePairStateSucceeded invalid ice candidate state")
 
-	errTrackLocalTrackRead   = errors.New("this is a local track and must not be read from")
-	errTrackLocalTrackWrite  = errors.New("this is a remote track and must not be written to")
-	errTrackSSRCNewTrackZero = errors.New("SSRC supplied to NewTrack() must be non-zero")
+	errICETransportNotInNew = errors.New("ICETransport can only be called in ICETransportStateNew")
+
+	errCertificatePEMFormatError = errors.New("bad Certificate PEM format")
+
+	errRTPTooShort = errors.New("not long enough to be a RTP Packet")
+
+	errExcessiveRetries = errors.New("excessive retries in CreateOffer")
 )

@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"fmt"
 	"io"
 	"sync"
 	"testing"
@@ -15,7 +16,7 @@ import (
 // bindings this is a requirement).
 const expectedLabel = "data"
 
-func closePairNow(t *testing.T, pc1, pc2 io.Closer) {
+func closePairNow(t testing.TB, pc1, pc2 io.Closer) {
 	var fail bool
 	if err := pc1.Close(); err != nil {
 		t.Errorf("Failed to close PeerConnection: %v", err)
@@ -63,7 +64,55 @@ func closeReliabilityParamTest(t *testing.T, pc1, pc2 *PeerConnection, done chan
 	closePair(t, pc1, pc2, done)
 }
 
+func BenchmarkDataChannelSend2(b *testing.B)  { benchmarkDataChannelSend(b, 2) }
+func BenchmarkDataChannelSend4(b *testing.B)  { benchmarkDataChannelSend(b, 4) }
+func BenchmarkDataChannelSend8(b *testing.B)  { benchmarkDataChannelSend(b, 8) }
+func BenchmarkDataChannelSend16(b *testing.B) { benchmarkDataChannelSend(b, 16) }
+func BenchmarkDataChannelSend32(b *testing.B) { benchmarkDataChannelSend(b, 32) }
+
+// See https://github.com/pion/webrtc/issues/1516
+func benchmarkDataChannelSend(b *testing.B, numChannels int) {
+	offerPC, answerPC, err := newPair()
+	if err != nil {
+		b.Fatalf("Failed to create a PC pair for testing")
+	}
+
+	open := make(map[string]chan bool)
+	answerPC.OnDataChannel(func(d *DataChannel) {
+		if _, ok := open[d.Label()]; !ok {
+			// Ignore anything unknown channel label.
+			return
+		}
+		d.OnOpen(func() { open[d.Label()] <- true })
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < numChannels; i++ {
+		label := fmt.Sprintf("dc-%d", i)
+		open[label] = make(chan bool)
+		wg.Add(1)
+		dc, err := offerPC.CreateDataChannel(label, nil)
+		assert.NoError(b, err)
+
+		dc.OnOpen(func() {
+			<-open[label]
+			for n := 0; n < b.N/numChannels; n++ {
+				if err := dc.SendText("Ping"); err != nil {
+					b.Fatalf("Unexpected error sending data (label=%q): %v", label, err)
+				}
+			}
+			wg.Done()
+		})
+	}
+
+	assert.NoError(b, signalPair(offerPC, answerPC))
+	wg.Wait()
+	closePairNow(b, offerPC, answerPC)
+}
+
 func TestDataChannel_Open(t *testing.T) {
+	const openOnceChannelCapacity = 2
+
 	t.Run("handler should be called once", func(t *testing.T) {
 		report := test.CheckRoutines(t)
 		defer report()
@@ -74,7 +123,7 @@ func TestDataChannel_Open(t *testing.T) {
 		}
 
 		done := make(chan bool)
-		openCalls := make(chan bool, 2)
+		openCalls := make(chan bool, openOnceChannelCapacity)
 
 		answerPC.OnDataChannel(func(d *DataChannel) {
 			if d.Label() != expectedLabel {
@@ -107,6 +156,63 @@ func TestDataChannel_Open(t *testing.T) {
 		closePair(t, offerPC, answerPC, done)
 
 		assert.Len(t, openCalls, 1)
+	})
+
+	t.Run("handler should be called once when already negotiated", func(t *testing.T) {
+		report := test.CheckRoutines(t)
+		defer report()
+
+		offerPC, answerPC, err := newPair()
+		if err != nil {
+			t.Fatalf("Failed to create a PC pair for testing")
+		}
+
+		done := make(chan bool)
+		answerOpenCalls := make(chan bool, openOnceChannelCapacity)
+		offerOpenCalls := make(chan bool, openOnceChannelCapacity)
+
+		negotiated := true
+		ordered := true
+		dataChannelID := uint16(0)
+
+		answerDC, err := answerPC.CreateDataChannel(expectedLabel, &DataChannelInit{
+			ID:         &dataChannelID,
+			Negotiated: &negotiated,
+			Ordered:    &ordered,
+		})
+		assert.NoError(t, err)
+		offerDC, err := offerPC.CreateDataChannel(expectedLabel, &DataChannelInit{
+			ID:         &dataChannelID,
+			Negotiated: &negotiated,
+			Ordered:    &ordered,
+		})
+		assert.NoError(t, err)
+
+		answerDC.OnMessage(func(msg DataChannelMessage) {
+			go func() {
+				// Wait a little bit to ensure all messages are processed.
+				time.Sleep(100 * time.Millisecond)
+				done <- true
+			}()
+		})
+		answerDC.OnOpen(func() {
+			answerOpenCalls <- true
+		})
+
+		offerDC.OnOpen(func() {
+			offerOpenCalls <- true
+			e := offerDC.SendText("Ping")
+			if e != nil {
+				t.Fatalf("Failed to send string on data channel")
+			}
+		})
+
+		assert.NoError(t, signalPair(offerPC, answerPC))
+
+		closePair(t, offerPC, answerPC, done)
+
+		assert.Len(t, answerOpenCalls, 1)
+		assert.Len(t, offerOpenCalls, 1)
 	})
 }
 
@@ -237,8 +343,7 @@ func TestDataChannel_Close(t *testing.T) {
 		dc, err := offerPC.CreateDataChannel(expectedLabel, nil)
 		assert.NoError(t, err)
 
-		assert.NoError(t, offerPC.Close())
-		assert.NoError(t, answerPC.Close())
+		closePairNow(t, offerPC, answerPC)
 		assert.NoError(t, dc.Close())
 	})
 
@@ -250,8 +355,7 @@ func TestDataChannel_Close(t *testing.T) {
 		assert.NoError(t, err)
 
 		assert.NoError(t, dc.Close())
-		assert.NoError(t, offerPC.Close())
-		assert.NoError(t, answerPC.Close())
+		closePairNow(t, offerPC, answerPC)
 	})
 }
 
