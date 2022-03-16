@@ -3,21 +3,26 @@
 package webrtc
 
 import (
+	"github.com/pion/interceptor"
 	"github.com/pion/logging"
 )
 
-// API bundles the global functions of the WebRTC and ORTC API.
-// Some of these functions are also exported globally using the
-// defaultAPI object. Note that the global version of the API
-// may be phased out in the future.
+// API allows configuration of a PeerConnection
+// with APIs that are available in the standard. This
+// lets you set custom behavior via the SettingEngine, configure
+// codecs via the MediaEngine and define custom media behaviors via
+// Interceptors.
 type API struct {
-	settingEngine *SettingEngine
-	mediaEngine   *MediaEngine
+	settingEngine       *SettingEngine
+	mediaEngine         *MediaEngine
+	interceptorRegistry *interceptor.Registry
+
+	interceptor interceptor.Interceptor // Generated per PeerConnection
 }
 
 // NewAPI Creates a new API object for keeping semi-global settings to WebRTC objects
 func NewAPI(options ...func(*API)) *API {
-	a := &API{}
+	a := &API{interceptor: &interceptor.NoOp{}}
 
 	for _, o := range options {
 		o(a)
@@ -35,14 +40,22 @@ func NewAPI(options ...func(*API)) *API {
 		a.mediaEngine = &MediaEngine{}
 	}
 
+	if a.interceptorRegistry == nil {
+		a.interceptorRegistry = &interceptor.Registry{}
+	}
+
 	return a
 }
 
 // WithMediaEngine allows providing a MediaEngine to the API.
-// Settings should not be changed after passing the engine to an API.
-func WithMediaEngine(m MediaEngine) func(a *API) {
+// Settings can be changed after passing the engine to an API.
+func WithMediaEngine(m *MediaEngine) func(a *API) {
 	return func(a *API) {
-		a.mediaEngine = &m
+		if m != nil {
+			a.mediaEngine = m
+		} else {
+			a.mediaEngine = &MediaEngine{}
+		}
 	}
 }
 
@@ -51,5 +64,13 @@ func WithMediaEngine(m MediaEngine) func(a *API) {
 func WithSettingEngine(s SettingEngine) func(a *API) {
 	return func(a *API) {
 		a.settingEngine = &s
+	}
+}
+
+// WithInterceptorRegistry allows providing Interceptors to the API.
+// Settings should not be changed after passing the registry to an API.
+func WithInterceptorRegistry(interceptorRegistry *interceptor.Registry) func(a *API) {
+	return func(a *API) {
+		a.interceptorRegistry = interceptorRegistry
 	}
 }

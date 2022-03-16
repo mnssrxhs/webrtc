@@ -3,11 +3,13 @@
 package webrtc
 
 import (
+	"io"
 	"time"
 
+	"github.com/pion/dtls/v2"
 	"github.com/pion/ice/v2"
 	"github.com/pion/logging"
-	"github.com/pion/sdp/v3"
+	"github.com/pion/transport/packetio"
 	"github.com/pion/transport/vnet"
 	"golang.org/x/net/proxy"
 )
@@ -49,15 +51,28 @@ type SettingEngine struct {
 		SRTCP *uint
 	}
 	sdpMediaLevelFingerprints                 bool
-	sdpExtensions                             map[SDPSectionType][]sdp.ExtMap
 	answeringDTLSRole                         DTLSRole
 	disableCertificateFingerprintVerification bool
 	disableSRTPReplayProtection               bool
 	disableSRTCPReplayProtection              bool
 	vnet                                      *vnet.Net
+	BufferFactory                             func(packetType packetio.BufferPacketType, ssrc uint32) io.ReadWriteCloser
 	LoggerFactory                             logging.LoggerFactory
 	iceTCPMux                                 ice.TCPMux
+	iceUDPMux                                 ice.UDPMux
 	iceProxyDialer                            proxy.Dialer
+	disableMediaEngineCopy                    bool
+	srtpProtectionProfiles                    []dtls.SRTPProtectionProfile
+	receiveMTU                                uint
+}
+
+// getReceiveMTU returns the configured MTU. If SettingEngine's MTU is configured to 0 it returns the default
+func (e *SettingEngine) getReceiveMTU() uint {
+	if e.receiveMTU != 0 {
+		return e.receiveMTU
+	}
+
+	return receiveMTU
 }
 
 // DetachDataChannels enables detaching data channels. When enabled
@@ -65,6 +80,12 @@ type SettingEngine struct {
 // DataChannel.Detach method.
 func (e *SettingEngine) DetachDataChannels() {
 	e.detach.DataChannels = true
+}
+
+// SetSRTPProtectionProfiles allows the user to override the default SRTP Protection Profiles
+// The default srtp protection profiles are provided by the function `defaultSrtpProtectionProfiles`
+func (e *SettingEngine) SetSRTPProtectionProfiles(profiles ...dtls.SRTPProtectionProfile) {
+	e.srtpProtectionProfiles = profiles
 }
 
 // SetICETimeouts sets the behavior around ICE Timeouts
@@ -250,69 +271,27 @@ func (e *SettingEngine) SetICETCPMux(tcpMux ice.TCPMux) {
 	e.iceTCPMux = tcpMux
 }
 
-// AddSDPExtensions adds available and offered extensions for media type.
-//
-// Ext IDs are optional and generated if you do not provide them
-// SDP answers will only include extensions supported by both sides
-func (e *SettingEngine) AddSDPExtensions(mediaType SDPSectionType, exts []sdp.ExtMap) {
-	if e.sdpExtensions == nil {
-		e.sdpExtensions = make(map[SDPSectionType][]sdp.ExtMap)
-	}
-	if _, ok := e.sdpExtensions[mediaType]; !ok {
-		e.sdpExtensions[mediaType] = []sdp.ExtMap{}
-	}
-	e.sdpExtensions[mediaType] = append(e.sdpExtensions[mediaType], exts...)
+// SetICEUDPMux allows ICE traffic to come through a single UDP port, drastically
+// simplifying deployments where ports will need to be opened/forwarded.
+// UDPMux should be started prior to creating PeerConnections.
+func (e *SettingEngine) SetICEUDPMux(udpMux ice.UDPMux) {
+	e.iceUDPMux = udpMux
 }
 
-func (e *SettingEngine) getSDPExtensions() map[SDPSectionType][]sdp.ExtMap {
-	var lastID int
-	idMap := map[string]int{}
-
-	// Build provided ext id map
-	for _, extList := range e.sdpExtensions {
-		for _, ext := range extList {
-			if ext.Value != 0 {
-				idMap[ext.URI.String()] = ext.Value
-			}
-		}
-	}
-
-	// Find next available ID
-	nextID := func() {
-		var done bool
-		for !done {
-			lastID++
-			var found bool
-			for _, v := range idMap {
-				if lastID == v {
-					found = true
-					break
-				}
-			}
-			if !found {
-				done = true
-			}
-		}
-	}
-
-	// Assign missing IDs across all media types based on URI
-	for mType, extList := range e.sdpExtensions {
-		for i, ext := range extList {
-			if ext.Value == 0 {
-				if id, ok := idMap[ext.URI.String()]; ok {
-					e.sdpExtensions[mType][i].Value = id
-				} else {
-					nextID()
-					e.sdpExtensions[mType][i].Value = lastID
-					idMap[ext.URI.String()] = lastID
-				}
-			}
-		}
-	}
-	return e.sdpExtensions
-}
-
-// SetProxyDialer sets the proxy dialer interface based on golang.org/x/net/proxy.
+// SetICEProxyDialer sets the proxy dialer interface based on golang.org/x/net/proxy.
 func (e *SettingEngine) SetICEProxyDialer(d proxy.Dialer) {
 	e.iceProxyDialer = d
+}
+
+// DisableMediaEngineCopy stops the MediaEngine from being copied. This allows a user to modify
+// the MediaEngine after the PeerConnection has been constructed. This is useful if you wish to
+// modify codecs after signaling. Make sure not to share MediaEngines between PeerConnections.
+func (e *SettingEngine) DisableMediaEngineCopy(isDisabled bool) {
+	e.disableMediaEngineCopy = isDisabled
+}
+
+// SetReceiveMTU sets the size of read buffer that copies incoming packets. This is optional.
+// Leave this 0 for the default receiveMTU
+func (e *SettingEngine) SetReceiveMTU(receiveMTU uint) {
+	e.receiveMTU = receiveMTU
 }

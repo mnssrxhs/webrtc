@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pion/sdp/v3"
 	"github.com/pion/transport/test"
 	"github.com/pion/webrtc/v3/pkg/rtcerr"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +28,7 @@ func newPair() (pcOffer *PeerConnection, pcAnswer *PeerConnection, err error) {
 	return pca, pcb, nil
 }
 
-func signalPair(pcOffer *PeerConnection, pcAnswer *PeerConnection) error {
+func signalPairWithModification(pcOffer *PeerConnection, pcAnswer *PeerConnection, modificationFunc func(string) string) error {
 	// Note(albrow): We need to create a data channel in order to trigger ICE
 	// candidate gathering in the background for the JavaScript/Wasm bindings. If
 	// we don't do this, the complete offer including ICE candidates will never be
@@ -45,7 +46,9 @@ func signalPair(pcOffer *PeerConnection, pcAnswer *PeerConnection) error {
 		return err
 	}
 	<-offerGatheringComplete
-	if err = pcAnswer.SetRemoteDescription(*pcOffer.LocalDescription()); err != nil {
+
+	offer.SDP = modificationFunc(pcOffer.LocalDescription().SDP)
+	if err = pcAnswer.SetRemoteDescription(offer); err != nil {
 		return err
 	}
 
@@ -59,6 +62,25 @@ func signalPair(pcOffer *PeerConnection, pcAnswer *PeerConnection) error {
 	}
 	<-answerGatheringComplete
 	return pcOffer.SetRemoteDescription(*pcAnswer.LocalDescription())
+}
+
+func signalPair(pcOffer *PeerConnection, pcAnswer *PeerConnection) error {
+	return signalPairWithModification(pcOffer, pcAnswer, func(sessionDescription string) string { return sessionDescription })
+}
+
+func offerMediaHasDirection(offer SessionDescription, kind RTPCodecType, direction RTPTransceiverDirection) bool {
+	parsed := &sdp.SessionDescription{}
+	if err := parsed.Unmarshal([]byte(offer.SDP)); err != nil {
+		return false
+	}
+
+	for _, media := range parsed.MediaDescriptions {
+		if media.MediaName.Media == kind.String() {
+			_, exists := media.Attribute(direction.String())
+			return exists
+		}
+	}
+	return false
 }
 
 func TestNew(t *testing.T) {
@@ -79,6 +101,7 @@ func TestNew(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.NotNil(t, pc)
+	assert.NoError(t, pc.Close())
 }
 
 func TestPeerConnection_SetConfiguration(t *testing.T) {
@@ -229,6 +252,7 @@ func TestPeerConnection_GetConfiguration(t *testing.T) {
 	// See: https://github.com/pion/webrtc/issues/513.
 	// assert.Equal(t, len(expected.Certificates), len(actual.Certificates))
 	assert.Equal(t, expected.ICECandidatePoolSize, actual.ICECandidatePoolSize)
+	assert.NoError(t, pc.Close())
 }
 
 const minimalOffer = `v=0
@@ -239,6 +263,7 @@ a=msid-semantic: WMS
 m=application 47299 DTLS/SCTP 5000
 c=IN IP4 192.168.20.129
 a=candidate:1966762134 1 udp 2122260223 192.168.20.129 47299 typ host generation 0
+a=candidate:1966762134 1 udp 2122262783 2001:db8::1 47199 typ host generation 0
 a=candidate:211962667 1 udp 2122194687 10.0.3.1 40864 typ host generation 0
 a=candidate:1002017894 1 tcp 1518280447 192.168.20.129 0 typ host tcptype active generation 0
 a=candidate:1109506011 1 tcp 1518214911 10.0.3.1 0 typ host tcptype active generation 0
@@ -302,10 +327,9 @@ func TestCreateOfferAnswer(t *testing.T) {
 	// so CreateAnswer should return an InvalidStateError
 	assert.Equal(t, answerPeerConn.SignalingState(), SignalingStateStable)
 	_, err = answerPeerConn.CreateAnswer(nil)
-	assert.Error(t, err, &rtcerr.InvalidStateError{Err: ErrIncorrectSignalingState})
+	assert.Error(t, err)
 
-	assert.NoError(t, offerPeerConn.Close())
-	assert.NoError(t, answerPeerConn.Close())
+	closePairNow(t, offerPeerConn, answerPeerConn)
 }
 
 func TestPeerConnection_EventHandlers(t *testing.T) {
@@ -403,8 +427,7 @@ func TestPeerConnection_EventHandlers(t *testing.T) {
 		t.Fatalf("timed out waiting for one or more events handlers to be called (these *were* called: %+v)", wasCalled)
 	}
 
-	assert.NoError(t, pcOffer.Close())
-	assert.NoError(t, pcAnswer.Close())
+	closePairNow(t, pcOffer, pcAnswer)
 }
 
 func TestMultipleOfferAnswer(t *testing.T) {
@@ -434,8 +457,7 @@ func TestMultipleOfferAnswer(t *testing.T) {
 		t.Errorf("Second Offer: got error: %v", err)
 	}
 
-	assert.NoError(t, firstPeerConn.Close())
-	assert.NoError(t, secondPeerConn.Close())
+	closePairNow(t, firstPeerConn, secondPeerConn)
 }
 
 func TestNoFingerprintInFirstMediaIfSetRemoteDescription(t *testing.T) {
@@ -561,8 +583,7 @@ func TestMultipleCreateChannel(t *testing.T) {
 
 	wg.Wait()
 
-	assert.NoError(t, pcOffer.Close())
-	assert.NoError(t, pcAnswer.Close())
+	closePairNow(t, pcOffer, pcAnswer)
 }
 
 // Assert that candidates are gathered by calling SetLocalDescription, not SetRemoteDescription
@@ -633,8 +654,7 @@ func TestGatherOnSetLocalDescription(t *testing.T) {
 		t.Error(err.Error())
 	}
 	<-pcAnswerGathered
-	assert.NoError(t, pcOffer.Close())
-	assert.NoError(t, pcAnswer.Close())
+	closePairNow(t, pcOffer, pcAnswer)
 }
 
 // Assert that SetRemoteDescription handles invalid states
@@ -651,4 +671,48 @@ func TestSetRemoteDescriptionInvalid(t *testing.T) {
 
 		assert.NoError(t, pc.Close())
 	})
+}
+
+func TestAddTransceiver(t *testing.T) {
+	lim := test.TimeOut(time.Second * 30)
+	defer lim.Stop()
+
+	report := test.CheckRoutines(t)
+	defer report()
+
+	for _, testCase := range []struct {
+		expectSender, expectReceiver bool
+		direction                    RTPTransceiverDirection
+	}{
+		{true, true, RTPTransceiverDirectionSendrecv},
+		// Go and WASM diverge
+		// {true, false, RTPTransceiverDirectionSendonly},
+		// {false, true, RTPTransceiverDirectionRecvonly},
+	} {
+		pc, err := NewPeerConnection(Configuration{})
+		assert.NoError(t, err)
+
+		transceiver, err := pc.AddTransceiverFromKind(RTPCodecTypeVideo, RTPTransceiverInit{
+			Direction: testCase.direction,
+		})
+		assert.NoError(t, err)
+
+		if testCase.expectReceiver {
+			assert.NotNil(t, transceiver.Receiver())
+		} else {
+			assert.Nil(t, transceiver.Receiver())
+		}
+
+		if testCase.expectSender {
+			assert.NotNil(t, transceiver.Sender())
+		} else {
+			assert.Nil(t, transceiver.Sender())
+		}
+
+		offer, err := pc.CreateOffer(nil)
+		assert.NoError(t, err)
+
+		assert.True(t, offerMediaHasDirection(offer, RTPCodecTypeVideo, testCase.direction))
+		assert.NoError(t, pc.Close())
+	}
 }

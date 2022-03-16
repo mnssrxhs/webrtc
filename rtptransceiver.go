@@ -4,10 +4,10 @@ package webrtc
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/pion/rtp"
-	"github.com/pion/sdp/v3"
 )
 
 // RTPTransceiver represents a combination of an RTPSender and an RTPReceiver that share a common mid.
@@ -17,8 +17,66 @@ type RTPTransceiver struct {
 	receiver  atomic.Value // *RTPReceiver
 	direction atomic.Value // RTPTransceiverDirection
 
+	codecs []RTPCodecParameters // User provided codecs via SetCodecPreferences
+
 	stopped bool
 	kind    RTPCodecType
+
+	api *API
+	mu  sync.RWMutex
+}
+
+func newRTPTransceiver(
+	receiver *RTPReceiver,
+	sender *RTPSender,
+	direction RTPTransceiverDirection,
+	kind RTPCodecType,
+	api *API,
+) *RTPTransceiver {
+	t := &RTPTransceiver{kind: kind, api: api}
+	t.setReceiver(receiver)
+	t.setSender(sender)
+	t.setDirection(direction)
+	return t
+}
+
+// SetCodecPreferences sets preferred list of supported codecs
+// if codecs is empty or nil we reset to default from MediaEngine
+func (t *RTPTransceiver) SetCodecPreferences(codecs []RTPCodecParameters) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for _, codec := range codecs {
+		if _, matchType := codecParametersFuzzySearch(codec, t.api.mediaEngine.getCodecsByKind(t.kind)); matchType == codecMatchNone {
+			return fmt.Errorf("%w %s", errRTPTransceiverCodecUnsupported, codec.MimeType)
+		}
+	}
+
+	t.codecs = codecs
+	return nil
+}
+
+// Codecs returns list of supported codecs
+func (t *RTPTransceiver) getCodecs() []RTPCodecParameters {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	mediaEngineCodecs := t.api.mediaEngine.getCodecsByKind(t.kind)
+	if len(t.codecs) == 0 {
+		return mediaEngineCodecs
+	}
+
+	filteredCodecs := []RTPCodecParameters{}
+	for _, codec := range t.codecs {
+		if c, matchType := codecParametersFuzzySearch(codec, mediaEngineCodecs); matchType != codecMatchNone {
+			if codec.PayloadType == 0 {
+				codec.PayloadType = c.PayloadType
+			}
+			filteredCodecs = append(filteredCodecs, codec)
+		}
+	}
+
+	return filteredCodecs
 }
 
 // Sender returns the RTPTransceiver's RTPSender if it has one
@@ -31,12 +89,20 @@ func (t *RTPTransceiver) Sender() *RTPSender {
 }
 
 // SetSender sets the RTPSender and Track to current transceiver
-func (t *RTPTransceiver) SetSender(s *RTPSender, track *Track) error {
+func (t *RTPTransceiver) SetSender(s *RTPSender, track TrackLocal) error {
 	t.setSender(s)
 	return t.setSendingTrack(track)
 }
 
 func (t *RTPTransceiver) setSender(s *RTPSender) {
+	if s != nil {
+		s.setRTPTransceiver(t)
+	}
+
+	if prevSender := t.Sender(); prevSender != nil {
+		prevSender.setRTPTransceiver(nil)
+	}
+
 	t.sender.Store(s)
 }
 
@@ -78,13 +144,13 @@ func (t *RTPTransceiver) Direction() RTPTransceiverDirection {
 
 // Stop irreversibly stops the RTPTransceiver
 func (t *RTPTransceiver) Stop() error {
-	if t.Sender() != nil {
-		if err := t.Sender().Stop(); err != nil {
+	if sender := t.Sender(); sender != nil {
+		if err := sender.Stop(); err != nil {
 			return err
 		}
 	}
-	if t.Receiver() != nil {
-		if err := t.Receiver().Stop(); err != nil {
+	if receiver := t.Receiver(); receiver != nil {
+		if err := receiver.Stop(); err != nil {
 			return err
 		}
 	}
@@ -94,6 +160,14 @@ func (t *RTPTransceiver) Stop() error {
 }
 
 func (t *RTPTransceiver) setReceiver(r *RTPReceiver) {
+	if r != nil {
+		r.setRTPTransceiver(t)
+	}
+
+	if prevReceiver := t.Receiver(); prevReceiver != nil {
+		prevReceiver.setRTPTransceiver(nil)
+	}
+
 	t.receiver.Store(r)
 }
 
@@ -101,8 +175,10 @@ func (t *RTPTransceiver) setDirection(d RTPTransceiverDirection) {
 	t.direction.Store(d)
 }
 
-func (t *RTPTransceiver) setSendingTrack(track *Track) error {
-	t.Sender().setTrack(track)
+func (t *RTPTransceiver) setSendingTrack(track TrackLocal) error {
+	if err := t.Sender().ReplaceTrack(track); err != nil {
+		return err
+	}
 	if track == nil {
 		t.setSender(nil)
 	}
@@ -114,6 +190,12 @@ func (t *RTPTransceiver) setSendingTrack(track *Track) error {
 		t.setDirection(RTPTransceiverDirectionSendonly)
 	case track == nil && t.Direction() == RTPTransceiverDirectionSendrecv:
 		t.setDirection(RTPTransceiverDirectionRecvonly)
+	case track != nil && t.Direction() == RTPTransceiverDirectionSendonly:
+		// Handle the case where a sendonly transceiver was added by a negotiation
+		// initiated by remote peer. For example a remote peer added a transceiver
+		// with direction recvonly.
+	case track != nil && t.Direction() == RTPTransceiverDirectionSendrecv:
+		// Similar to above, but for sendrecv transceiver.
 	case track == nil && t.Direction() == RTPTransceiverDirectionSendonly:
 		t.setDirection(RTPTransceiverDirectionInactive)
 	default:
@@ -141,7 +223,7 @@ func satisfyTypeAndDirection(remoteKind RTPCodecType, remoteDirection RTPTransce
 		case RTPTransceiverDirectionSendrecv:
 			return []RTPTransceiverDirection{RTPTransceiverDirectionRecvonly, RTPTransceiverDirectionSendrecv}
 		case RTPTransceiverDirectionSendonly:
-			return []RTPTransceiverDirection{RTPTransceiverDirectionRecvonly, RTPTransceiverDirectionSendrecv}
+			return []RTPTransceiverDirection{RTPTransceiverDirectionRecvonly}
 		case RTPTransceiverDirectionRecvonly:
 			return []RTPTransceiverDirection{RTPTransceiverDirectionSendonly, RTPTransceiverDirectionSendrecv}
 		default:
@@ -163,7 +245,7 @@ func satisfyTypeAndDirection(remoteKind RTPCodecType, remoteDirection RTPTransce
 
 // handleUnknownRTPPacket consumes a single RTP Packet and returns information that is helpful
 // for demuxing and handling an unknown SSRC (usually for Simulcast)
-func handleUnknownRTPPacket(buf []byte, sdesMidExtMap, sdesStreamIDExtMap *sdp.ExtMap) (mid, rid string, payloadType uint8, err error) {
+func handleUnknownRTPPacket(buf []byte, midExtensionID, streamIDExtensionID, repairStreamIDExtensionID uint8, mid, rid, rsid *string) (payloadType PayloadType, err error) {
 	rp := &rtp.Packet{}
 	if err = rp.Unmarshal(buf); err != nil {
 		return
@@ -173,13 +255,17 @@ func handleUnknownRTPPacket(buf []byte, sdesMidExtMap, sdesStreamIDExtMap *sdp.E
 		return
 	}
 
-	payloadType = rp.PayloadType
-	if payload := rp.GetExtension(uint8(sdesMidExtMap.Value)); payload != nil {
-		mid = string(payload)
+	payloadType = PayloadType(rp.PayloadType)
+	if payload := rp.GetExtension(midExtensionID); payload != nil {
+		*mid = string(payload)
 	}
 
-	if payload := rp.GetExtension(uint8(sdesStreamIDExtMap.Value)); payload != nil {
-		rid = string(payload)
+	if payload := rp.GetExtension(streamIDExtensionID); payload != nil {
+		*rid = string(payload)
+	}
+
+	if payload := rp.GetExtension(repairStreamIDExtensionID); payload != nil {
+		*rsid = string(payload)
 	}
 
 	return
